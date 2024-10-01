@@ -1,0 +1,10 @@
+[package]
+name = "funcad"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pest = "2.7.13"
+pest_derive = "2.7.13"
+thiserror = "1.0.64"
+typed-arena = "2.0.2"

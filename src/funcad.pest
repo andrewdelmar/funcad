@@ -1,0 +1,37 @@
+WHITESPACE = _{ WHITE_SPACE }
+
+identifier = @{ LETTER ~ (LETTER | NUMBER)* }
+
+number = @{
+    "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+}
+
+func_name = ${ identifier ~ ("." ~ identifier)* }
+
+import    =  { "import" ~ file_name }
+file_name = ${ "../"* ~ identifier ~ ("/" ~ identifier)* }
+
+func_def = { identifier ~ arg_defs? ~ "=" ~ expr }
+arg_defs = { "(" ~ arg_def ~ ("," ~ arg_def)* ~ ")" }
+arg_def  = { identifier ~ ("=" ~ expr)? }
+
+func_call       = { func_name ~ (empty_call_args | pos_call_args | named_call_args)? }
+empty_call_args = { "(" ~ ")" }
+pos_call_args   = { "(" ~ expr ~ ("," ~ expr)* ~ ")" }
+named_call_arg  = { identifier ~ "=" ~ expr }
+named_call_args = { "(" ~ named_call_arg ~ ("," ~ named_call_arg)* ~ ")" }
+
+paren_expr = { "(" ~ expr ~ ")" }
+
+expr   =  { prefix* ~ unit ~ (infix ~ prefix* ~ unit)* }
+prefix = _{ neg }
+neg    =  { "-" }
+unit   = _{ number | paren_expr | func_call }
+infix  = _{ add | sub | mul | div }
+add    =  { "+" }
+sub    =  { "-" }
+mul    =  { "*" }
+div    =  { "/" }
+
+document  =  { SOI ~ statement* ~ EOI }
+statement = _{ import | func_def }

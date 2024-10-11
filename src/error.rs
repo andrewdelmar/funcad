@@ -54,6 +54,8 @@ pub enum EvalError<'src> {
     FuncCallTooManyArgs(FuncCallExpr<'src>, FuncDef<'src>),
     #[error("Extra named args:\n\t{0}\nin call:\n\t{}\nof funtion:\n\t{2}", .1.iter().map(NamedCallArg::to_string).collect::<Vec<_>>().join(","))]
     FuncCallExtraNamedArgs(FuncCallExpr<'src>, Vec<NamedCallArg<'src>>, FuncDef<'src>),
+    #[error("Function is infinitely recursive:\n\t{0}")]
+    FuncCallInfiniteRecursion(FuncDef<'src>),
 
     #[error("Document of function not found:\n\t{0}")]
     EvalFuncDocNotFound(FQPath),
@@ -61,6 +63,9 @@ pub enum EvalError<'src> {
     EvalFuncFuncNotFound(String),
     #[error("Function to evaluate has arguments without default values:\n\t{0}")]
     EvalFuncHasArgs(FuncDef<'src>),
+
+    #[error("An arithmetic operation resulted in a non finite result:\n\t{0}")]
+    BinaryExprNotFinite(BinaryExpr<'src>),
 }
 
 // The #[from] macro can't handle non static lifetimes.

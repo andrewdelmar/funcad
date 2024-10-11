@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    hash::Hash,
+};
 
 use crate::{
     error::{EvalError, EvalResult},
@@ -6,30 +9,53 @@ use crate::{
     UnaryExpr, UnaryOp,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Number(f64),
 }
 
+// This is dangerous since float NaNs are never equal.
+// We throw errors the moment NaNs are detected so this *shouldn't* be an issue.
+impl Eq for Value {}
+
+impl Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            // Just comparing the bits of floats ignores the fact that NaNs
+            // should never be equal, but we should error on NaN anyway.
+            Value::Number(val) => val.to_bits().hash(state),
+        }
+    }
+}
+
 //TODO this should be used as a key for EvalCache.
+#[derive(Clone, Hash, PartialEq, Eq)]
 struct Scope {
-    _func_name: String,
+    func_name: String,
     //TODO Eventually args should be lazily evaluated.
-    args: HashMap<String, Value>,
+    args: BTreeMap<String, Value>,
     doc: FQPath,
 }
 
 pub(crate) struct EvalCache<'set, 'src> {
-    pub(crate) docs: &'set DocSet<'src>,
+    docs: &'set DocSet<'src>,
     //TODO actual cache
-    //TODO evaluating set for loop detection.
+    evaluating: HashSet<Scope>,
 }
 
 impl<'set, 'src> EvalCache<'set, 'src> {
     const GLOBAL_FUNCNAME: &'static str = "GLOBAL";
 
+    pub(crate) fn new(docs: &'set DocSet<'src>) -> Self {
+        Self {
+            docs,
+            evaluating: HashSet::new(),
+        }
+    }
+
     pub(crate) fn eval_func_by_name(
-        &self,
+        &mut self,
         doc_path: &FQPath,
         func_name: &str,
     ) -> EvalResult<'src, Value> {
@@ -42,8 +68,8 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         };
 
         let mut scope = Scope {
-            _func_name: func_name.to_string(),
-            args: HashMap::new(),
+            func_name: func_name.to_string(),
+            args: BTreeMap::new(),
             doc: doc_path.clone(),
         };
 
@@ -61,7 +87,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         self.eval_expr(&func.body, &scope)
     }
 
-    fn eval_expr(&self, expr: &Expr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+    fn eval_expr(&mut self, expr: &Expr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
         match expr {
             Expr::Number(Number { val, .. }) => Ok(Value::Number(*val)),
             Expr::Unary(unary) => self.eval_unary(unary, scope),
@@ -70,7 +96,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         }
     }
 
-    fn eval_unary(&self, expr: &UnaryExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+    fn eval_unary(&mut self, expr: &UnaryExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
         match expr.op {
             UnaryOp::Neg => match self.eval_expr(&expr.unit, scope)? {
                 Value::Number(number) => Ok(Value::Number(-number)),
@@ -78,20 +104,47 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         }
     }
 
-    fn eval_binary(&self, expr: &BinaryExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+    fn eval_binary(&mut self, expr: &BinaryExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
         let lhsv = self.eval_expr(&expr.lhs, scope)?;
         let rhsv = self.eval_expr(&expr.rhs, scope)?;
 
         use {BinaryOp::*, Value::*};
-        match (lhsv, expr.op, rhsv) {
-            (Number(lhs), Add, Number(rhs)) => Ok(Number(lhs + rhs)),
-            (Number(lhs), Sub, Number(rhs)) => Ok(Number(lhs - rhs)),
-            (Number(lhs), Mul, Number(rhs)) => Ok(Number(lhs * rhs)),
-            (Number(lhs), Div, Number(rhs)) => Ok(Number(lhs / rhs)),
+        let val = match (lhsv, expr.op, rhsv) {
+            (Number(lhs), Add, Number(rhs)) => Number(lhs + rhs),
+            (Number(lhs), Sub, Number(rhs)) => Number(lhs - rhs),
+            (Number(lhs), Mul, Number(rhs)) => Number(lhs * rhs),
+            (Number(lhs), Div, Number(rhs)) => Number(lhs / rhs),
+        };
+
+        // This won't stay irrifutable for long.
+        #[allow(irrefutable_let_patterns)]
+        if let Number(fval) = val {
+            if !fval.is_finite() {
+                return Err(EvalError::BinaryExprNotFinite(expr.clone()));
+            }
         }
+
+        Ok(val)
     }
 
-    fn eval_func_call(&self, expr: &FuncCallExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+    fn eval_func(&mut self, func: &FuncDef<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+        if self.evaluating.contains(scope) {
+            return Err(EvalError::FuncCallInfiniteRecursion(func.clone()));
+        }
+        self.evaluating.insert(scope.clone());
+
+        let val = self.eval_expr(&func.body, scope)?;
+
+        self.evaluating.remove(&scope);
+
+        Ok(val)
+    }
+
+    fn eval_func_call(
+        &mut self,
+        expr: &FuncCallExpr<'src>,
+        scope: &Scope,
+    ) -> EvalResult<'src, Value> {
         let this_doc = &self.docs[&scope.doc];
 
         if let Some(import_part) = expr.name.import_part {
@@ -109,7 +162,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
             };
 
             let call_scope = self.build_call_scope(scope, func, &import_path, expr)?;
-            self.eval_expr(&func.body, &call_scope)
+            self.eval_func(func, &call_scope)
         } else {
             if let Some(arg) = scope.args.get(expr.name.name_part.text) {
                 Ok(arg.clone())
@@ -119,21 +172,21 @@ impl<'set, 'src> EvalCache<'set, 'src> {
                 };
 
                 let call_scope = self.build_call_scope(scope, func, &scope.doc, expr)?;
-                self.eval_expr(&func.body, &call_scope)
+                self.eval_func(func, &call_scope)
             }
         }
     }
 
     fn build_call_scope(
-        &self,
+        &mut self,
         scope: &Scope,
         func_def: &FuncDef<'src>,
         def_doc_path: &FQPath,
         expr: &FuncCallExpr<'src>,
     ) -> EvalResult<'src, Scope> {
         let mut new = Scope {
-            _func_name: func_def.name.text.into(),
-            args: HashMap::default(),
+            func_name: func_def.name.text.into(),
+            args: BTreeMap::default(),
             doc: def_doc_path.clone(),
         };
 
@@ -208,10 +261,10 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         Ok(new)
     }
 
-    fn eval_default_value(&self, expr: &Expr<'src>, doc: &FQPath) -> EvalResult<'src, Value> {
+    fn eval_default_value(&mut self, expr: &Expr<'src>, doc: &FQPath) -> EvalResult<'src, Value> {
         let default_scope = Scope {
-            _func_name: Self::GLOBAL_FUNCNAME.into(),
-            args: HashMap::default(),
+            func_name: Self::GLOBAL_FUNCNAME.into(),
+            args: BTreeMap::default(),
             doc: doc.clone(),
         };
 

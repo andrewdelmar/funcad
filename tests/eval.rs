@@ -92,3 +92,54 @@ fn eval_call_in_import_ok() {
     let eval_result = eval_function(&doc_set, &entry, "a");
     assert_matches!(eval_result, Ok(Value::Number(2.)))
 }
+
+/// Division by zero.
+#[test]
+fn eval_nan_errors() {
+    let mut set = FileSet::default();
+    set.insert("main", "a = 1 / 0");
+
+    let arena = Arena::new();
+    let entry = FQPath(vec!["main".into()]);
+
+    let parse_result = parse_all(&arena, &entry, |s| set.get_source(s));
+    assert_matches!(parse_result, Ok(_));
+    let doc_set = parse_result.unwrap();
+
+    let eval_result = eval_function(&doc_set, &entry, "a");
+    assert_matches!(eval_result, Err(EvalError::BinaryExprNotFinite(_)))
+}
+
+/// Division by zero.
+#[test]
+fn eval_infinite_recursion_errors() {
+    let mut set = FileSet::default();
+    set.insert("main", "a = a + 1");
+
+    let arena = Arena::new();
+    let entry = FQPath(vec!["main".into()]);
+
+    let parse_result = parse_all(&arena, &entry, |s| set.get_source(s));
+    assert_matches!(parse_result, Ok(_));
+    let doc_set = parse_result.unwrap();
+
+    let eval_result = eval_function(&doc_set, &entry, "a");
+    assert_matches!(eval_result, Err(EvalError::FuncCallInfiniteRecursion(_)))
+}
+
+/// Calling same function twice.
+#[test]
+fn eval_multiple_calls_ok() {
+    let mut set = FileSet::default();
+    set.insert("main", "a = b + b\nb = 1");
+
+    let arena = Arena::new();
+    let entry = FQPath(vec!["main".into()]);
+
+    let parse_result = parse_all(&arena, &entry, |s| set.get_source(s));
+    assert_matches!(parse_result, Ok(_));
+    let doc_set = parse_result.unwrap();
+
+    let eval_result = eval_function(&doc_set, &entry, "a");
+    assert_matches!(eval_result, Ok(Value::Number(2.)))
+}

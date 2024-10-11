@@ -106,7 +106,7 @@ pub fn eval_function<'src>(
     doc_path: &FQPath,
     func_name: &str,
 ) -> EvalResult<'src, Value> {
-    let cache = EvalCache { docs };
+    let mut cache = EvalCache::new(docs);
     cache.eval_func_by_name(doc_path, func_name)
 }
 

@@ -4,13 +4,26 @@ use pest::Span;
 
 use super::*;
 
-/// A single argument in a function definition, and maybe an expression for its 
+/// A single argument in a function definition, and maybe an expression for its
 /// default value.
 #[derive(Clone, Debug)]
 pub struct ArgDef<'src> {
     pub name: Identifier<'src>,
     pub default: Option<Expr<'src>>,
     pub span: Span<'src>,
+}
+
+impl<'src> Display for ArgDef<'src> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (line, col) = self.span.start_pos().line_col();
+        write!(
+            f,
+            "\"{0}\" on line {1}, col {2}",
+            self.span.as_str(),
+            line,
+            col
+        )
+    }
 }
 
 impl<'src> TryFrom<Pair<'src, Rule>> for ArgDef<'src> {

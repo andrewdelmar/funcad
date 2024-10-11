@@ -4,13 +4,19 @@ pub mod ast;
 use ast::*;
 
 mod error;
-pub use error::ParseError;
+pub use error::{EvalError, ParseError};
+use error::{EvalResult, ParseResult};
+
+mod eval;
+use eval::EvalCache;
+pub use eval::Value;
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeSet, HashMap},
+    fmt::Display,
     fs::File,
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use pest::Parser;
@@ -38,32 +44,34 @@ pub fn parse_document<'src>(src: &'src str) -> Result<Document, ParseError> {
     Document::try_from(pair)
 }
 
+/// A collection of documents by path.
+type DocSet<'src> = HashMap<FQPath, Document<'src>>;
+
 /// Parse `main` and any imports recursively.
 ///
-/// `main` is the name of the first file to fetch with the get_source function.
-/// It should be in format of funcad imports (identifiers separated by "/").
-///
-/// `get_source` should return a reader to a source file relative to the path
-/// containing main.
-pub fn parse_all<'src, R: Read, F: Fn(&str) -> Result<R, ParseError<'src>>>(
+/// `get_source` should return a reader to a source file given an FQPath.
+pub fn parse_all<'src, R, F>(
     source_arena: &'src Arena<u8>,
-    main: String,
+    main: &FQPath,
     get_source: F,
-) -> Result<BTreeMap<String, Document<'src>>, ParseError<'src>> {
+) -> ParseResult<'src, DocSet<'src>>
+where
+    R: Read,
+    F: Fn(&FQPath) -> ParseResult<'src, R>,
+{
     let mut to_parse = BTreeSet::new();
-    let mut parsed = BTreeMap::new();
+    let mut parsed = HashMap::new();
 
-    to_parse.insert(main.to_string());
+    to_parse.insert(main.clone());
 
     while let Some(current) = to_parse.pop_first() {
         if !parsed.contains_key(&current) {
-            let src = alloc_src(source_arena, get_source(&current.clone())?)?;
+            let src = alloc_src(source_arena, get_source(&current)?)?;
 
             let doc = parse_document(src)?;
 
-            let current_dir = file_dir(&current);
             for import in doc.imports.values() {
-                to_parse.insert(import.file_path(&current_dir)?);
+                to_parse.insert(current.import_path(&import)?);
             }
 
             parsed.insert(current, doc);
@@ -73,27 +81,77 @@ pub fn parse_all<'src, R: Read, F: Fn(&str) -> Result<R, ParseError<'src>>>(
     Ok(parsed)
 }
 
-/// Read and parse `main` and any imports recursively.
+/// Read and parse the file `main` and any imports recursively.
 pub fn parse_all_files<'src>(
     source_arena: &'src Arena<u8>,
     main: &Path,
-) -> Result<BTreeMap<String, Document<'src>>, ParseError<'src>> {
-    let (Some(path), Some(main_name)) = (main.parent(), main.file_name()) else {
-        return Err(ParseError::MainRoot);
+) -> ParseResult<'src, DocSet<'src>> {
+    let (Some(path), Some(main_name)) = (main.parent(), main.file_stem()) else {
+        return Err(ParseError::InvalidMain);
     };
 
-    parse_all(source_arena, main_name.to_string_lossy().into(), |file| {
-        let src = File::open(path.join(file))?;
-        Ok(src)
-    })
+    parse_all(
+        source_arena,
+        &FQPath(vec![main_name.to_string_lossy().into()]),
+        |source_path| {
+            let src = File::open(source_path.file_path(path))?;
+            Ok(src)
+        },
+    )
 }
 
-fn file_dir(file: &str) -> String {
-    // Since files in import directives are only separated by forward slashes,
-    // we can extract the dir with just a split.
-    let mut parts: Vec<_> = file.split("/").collect();
-    parts.pop();
-    parts.join("/")
+/// Evaluate a single function in `doc_path` by name.
+pub fn eval_function<'src>(
+    docs: &DocSet<'src>,
+    doc_path: &FQPath,
+    func_name: &str,
+) -> EvalResult<'src, Value> {
+    let cache = EvalCache { docs };
+    cache.eval_func_by_name(doc_path, func_name)
+}
+
+/// A "fully qualified" path to a document or function.
+///
+/// An FQPath is not interchangable with a [`Path`] and is only fully qualified
+/// in the sense that it is relative to the entry point (the directory of main)
+/// and not an individual document.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
+pub struct FQPath(pub Vec<String>);
+
+impl Display for FQPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.join("/"))
+    }
+}
+
+impl FQPath {
+    /// Returns the `FQPath` of an import in a doc with path this path.
+    pub(crate) fn import_path<'src>(
+        &self,
+        import: &Import<'src>,
+    ) -> Result<FQPath, ParseError<'src>> {
+        let mut new_parts = self.0.clone();
+        new_parts.pop();
+
+        for part in import.file.split("/") {
+            match part {
+                ".." => match new_parts.pop() {
+                    None => return Err(ParseError::ImportNotInDir(*import)),
+                    _ => {}
+                },
+                ident => {
+                    new_parts.push(ident.to_string());
+                }
+            }
+        }
+
+        Ok(Self(new_parts))
+    }
+
+    /// Returns a Pathbuf pointing to a .fc file with this path.
+    pub(crate) fn file_path(&self, base: &Path) -> PathBuf {
+        return base.join(format!("{}.fc", self.0.join("/")));
+    }
 }
 
 fn alloc_src<'src, R: Read>(

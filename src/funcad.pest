@@ -6,7 +6,7 @@ number = @{
     "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ ("." ~ ASCII_DIGIT*)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)?
 }
 
-func_name = ${ identifier ~ ("." ~ identifier)* }
+func_name = ${ identifier ~ ("." ~ identifier)? }
 
 import    =  { "import" ~ file_name }
 file_name = ${ "../"* ~ identifier ~ ("/" ~ identifier)* }

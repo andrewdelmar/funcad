@@ -41,25 +41,3 @@ impl<'src> TryFrom<Pair<'src, Rule>> for Import<'src> {
         }
     }
 }
-
-impl<'src> Import<'src> {
-    const EXTENSION: &'static str = ".fc";
-
-    pub(crate) fn file_path(&self, base: &str) -> Result<String, ParseError<'src>> {
-        let mut out: Vec<_> = base.split("/").filter(|s| *s != "").collect();
-
-        for part in self.file.split("/") {
-            match part {
-                ".." => match out.pop() {
-                    Some("") | None => return Err(ParseError::ImportNotInDir(*self)),
-                    _ => {}
-                },
-                ident => {
-                    out.push(ident);
-                }
-            }
-        }
-
-        Ok(out.join("/") + Self::EXTENSION)
-    }
-}

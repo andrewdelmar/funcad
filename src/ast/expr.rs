@@ -1,22 +1,20 @@
-use std::fmt::Display;
-
-use pest::{
-    pratt_parser::{Assoc, Op, PrattParser},
-    Span,
-};
+use pest::pratt_parser::{Assoc, Op, PrattParser};
 
 use super::*;
 
 /// An expression, or part of one such as `sin(1.2 * pi) * 0.5`.
 #[derive(Clone, Debug)]
 pub enum Expr<'src> {
-    Number(Number<'src>),
+    Number(Number),
     Unary(UnaryExpr<'src>),
     Binary(BinaryExpr<'src>),
     FuncCall(FuncCallExpr<'src>),
 }
 
-impl<'src> TryFrom<Pair<'src, Rule>> for Expr<'src> {
+/// [`Expr`] but [`Spanned`].
+pub type SpannedExpr<'src> = Spanned<'src, Expr<'src>>;
+
+impl<'src> TryFrom<Pair<'src, Rule>> for SpannedExpr<'src> {
     type Error = ParseError<'src>;
 
     fn try_from(value: Pair<'src, Rule>) -> ParseResult<Self> {
@@ -28,7 +26,7 @@ impl<'src> TryFrom<Pair<'src, Rule>> for Expr<'src> {
     }
 }
 
-impl<'src> Expr<'src> {
+impl<'src> SpannedExpr<'src> {
     fn pratt() -> PrattParser<Rule> {
         PrattParser::new()
             .op(Op::infix(Rule::add, Assoc::Left) | Op::infix(Rule::sub, Assoc::Left))
@@ -37,10 +35,12 @@ impl<'src> Expr<'src> {
     }
 
     fn primary(primary: Pair<'src, Rule>) -> ParseResult<'src, Self> {
+        let span = primary.as_span();
+
         match primary.as_rule() {
-            Rule::number => Ok(Expr::Number(Number::try_from(primary)?)),
-            Rule::func_call => Ok(Expr::FuncCall(primary.try_into()?)),
-            Rule::paren_expr => Expr::try_from(primary.into_inner().try_next()?),
+            Rule::number => Ok(Expr::Number(Number::try_from(primary)?).spanned(&span)),
+            Rule::func_call => Ok(Expr::FuncCall(primary.try_into()?).spanned(&span)),
+            Rule::paren_expr => primary.into_inner().try_next()?.try_into(),
             _ => Err(ParseError::UnexpectedFieldType),
         }
     }
@@ -52,7 +52,7 @@ impl<'src> Expr<'src> {
     ) -> ParseResult<'src, Self> {
         let (lhs, rhs) = (lhs?, rhs?);
 
-        let (lspan, rspan) = (lhs.span(), rhs.span());
+        let (lspan, rspan) = (lhs.span, rhs.span);
         let span = Span::new(lspan.get_input(), lspan.start(), rspan.end())
             .ok_or(ParseError::ExpectedUnwrap)?;
 
@@ -67,14 +67,14 @@ impl<'src> Expr<'src> {
             lhs: Box::new(lhs),
             op,
             rhs: Box::new(rhs),
-            span,
-        }))
+        })
+        .spanned(&span))
     }
 
     fn prefix(op: Pair<'src, Rule>, unit: ParseResult<'src, Self>) -> ParseResult<'src, Self> {
         let unit = unit?;
 
-        let (ospan, uspan) = (op.as_span(), unit.span());
+        let (ospan, uspan) = (op.as_span(), unit.span);
         let span = Span::new(ospan.get_input(), ospan.start(), uspan.end())
             .ok_or(ParseError::ExpectedUnwrap)?;
 
@@ -85,28 +85,18 @@ impl<'src> Expr<'src> {
         Ok(Expr::Unary(UnaryExpr {
             op,
             unit: Box::new(unit),
-            span,
-        }))
-    }
-
-    fn span(&self) -> Span<'src> {
-        match self {
-            Expr::Number(number) => number.span,
-            Expr::Unary(unary_expr) => unary_expr.span,
-            Expr::Binary(binary_expr) => binary_expr.span,
-            Expr::FuncCall(func_call_expr) => func_call_expr.span,
-        }
+        })
+        .spanned(&span))
     }
 }
 
 /// A single scalar value literal.
 #[derive(Clone, Copy, Debug)]
-pub struct Number<'src> {
+pub struct Number {
     pub val: f64,
-    pub span: Span<'src>,
 }
 
-impl<'src> TryFrom<Pair<'src, Rule>> for Number<'src> {
+impl<'src> TryFrom<Pair<'src, Rule>> for Number {
     type Error = ParseError<'src>;
 
     fn try_from(value: Pair<'src, Rule>) -> ParseResult<'src, Self> {
@@ -115,10 +105,12 @@ impl<'src> TryFrom<Pair<'src, Rule>> for Number<'src> {
                 .as_str()
                 .parse()
                 .map_err(|e| ParseError::Float(e, value.as_span()))?,
-            span: value.as_span(),
         })
     }
 }
+
+/// [`Number`] but [`Spanned`].
+pub type SpannedNumber<'src> = Spanned<'src, Number>;
 
 /// A unary operator such as `-` (negation).
 #[derive(Clone, Copy, Debug)]
@@ -130,9 +122,11 @@ pub enum UnaryOp {
 #[derive(Clone, Debug)]
 pub struct UnaryExpr<'src> {
     pub op: UnaryOp,
-    pub unit: Box<Expr<'src>>,
-    pub span: Span<'src>,
+    pub unit: Box<SpannedExpr<'src>>,
 }
+
+/// [`UnaryExpr`] but [`Spanned`].
+pub type SpannedUnaryExpr<'src> = Spanned<'src, UnaryExpr<'src>>;
 
 /// A binary operator such as `+` or `-`.
 #[derive(Clone, Copy, Debug)]
@@ -146,51 +140,28 @@ pub enum BinaryOp {
 /// A binary expression like `a + b`.
 #[derive(Clone, Debug)]
 pub struct BinaryExpr<'src> {
-    pub lhs: Box<Expr<'src>>,
+    pub lhs: Box<SpannedExpr<'src>>,
     pub op: BinaryOp,
-    pub rhs: Box<Expr<'src>>,
-    pub span: Span<'src>,
+    pub rhs: Box<SpannedExpr<'src>>,
 }
 
-impl<'src> Display for BinaryExpr<'src> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (line, col) = self.span.start_pos().line_col();
-        write!(
-            f,
-            "\"{0}\" on line {1}, col {2}",
-            self.span.as_str(),
-            line,
-            col
-        )
-    }
-}
+/// [`BinaryExpr`] but [`Spanned`].
+pub type SpannedBinaryExpr<'src> = Spanned<'src, BinaryExpr<'src>>;
 
 /// A function call like `foo` or `bar(1, 2)`.
 #[derive(Clone, Debug)]
 pub struct FuncCallExpr<'src> {
     pub name: FuncName<'src>,
     pub args: CallArgs<'src>,
-    pub span: Span<'src>,
 }
 
-impl<'src> Display for FuncCallExpr<'src> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (line, col) = self.span.start_pos().line_col();
-        write!(
-            f,
-            "\"{0}\" on line {1}, col {2}",
-            self.span.as_str(),
-            line,
-            col
-        )
-    }
-}
+/// [`FuncCallExpr`] but [`Spanned`].
+pub type SpannedFuncCallExpr<'src> = Spanned<'src, FuncCallExpr<'src>>;
 
 impl<'src> TryFrom<Pair<'src, Rule>> for FuncCallExpr<'src> {
     type Error = ParseError<'src>;
 
     fn try_from(value: Pair<'src, Rule>) -> ParseResult<'src, Self> {
-        let span = value.as_span();
         let mut inner = value.into_inner();
         let name = FuncName::try_from(inner.try_next()?)?;
         let args = if let Some(pair) = inner.next() {
@@ -199,6 +170,6 @@ impl<'src> TryFrom<Pair<'src, Rule>> for FuncCallExpr<'src> {
             CallArgs::default()
         };
 
-        Ok(FuncCallExpr { name, args, span })
+        Ok(FuncCallExpr { name, args })
     }
 }

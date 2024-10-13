@@ -1,10 +1,8 @@
-use std::fmt::Display;
-
 use pest::{iterators::Pair, Span};
 
 use crate::{ParseError, Rule};
 
-use super::TryNext;
+use super::{Spanned, TryNext};
 
 /// An import directive.
 #[derive(Clone, Copy, Debug)]
@@ -14,12 +12,8 @@ pub struct Import<'src> {
     pub span: Span<'src>,
 }
 
-impl<'src> Display for Import<'src> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let line = self.span.start_pos().line_col().0;
-        write!(f, "\"{0}\" on line {1}", self.span.as_str(), line)
-    }
-}
+/// [`Import`], but [`Spanned`].
+pub type SpannedImport<'src> = Spanned<'src, Import<'src>>;
 
 impl<'src> TryFrom<Pair<'src, Rule>> for Import<'src> {
     type Error = ParseError<'src>;

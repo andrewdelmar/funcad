@@ -3,10 +3,12 @@ use std::{
     hash::Hash,
 };
 
+use pest::Span;
+
 use crate::{
+    ast::*,
     error::{EvalError, EvalResult},
-    ArgDef, BinaryExpr, BinaryOp, CallArgs, DocSet, Expr, FQPath, FuncCallExpr, FuncDef, Number,
-    UnaryExpr, UnaryOp,
+    DocSet, FQPath,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -87,16 +89,21 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         self.eval_expr(&func.body, &scope)
     }
 
-    fn eval_expr(&mut self, expr: &Expr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
-        match expr {
-            Expr::Number(Number { val, .. }) => Ok(Value::Number(*val)),
-            Expr::Unary(unary) => self.eval_unary(unary, scope),
-            Expr::Binary(binary) => self.eval_binary(binary, scope),
-            Expr::FuncCall(call) => self.eval_func_call(call, scope),
+    fn eval_expr(&mut self, expr: &SpannedExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+        match &expr.inner {
+            Expr::Number(Number { val }) => Ok(Value::Number(*val)),
+            Expr::Unary(unary) => self.eval_unary_expr(unary, &expr.span, scope),
+            Expr::Binary(binary) => self.eval_binary_expr(binary, &expr.span, scope),
+            Expr::FuncCall(call) => self.eval_func_call_expr(call, &expr.span, scope),
         }
     }
 
-    fn eval_unary(&mut self, expr: &UnaryExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+    fn eval_unary_expr(
+        &mut self,
+        expr: &UnaryExpr<'src>,
+        _span: &Span<'src>,
+        scope: &Scope,
+    ) -> EvalResult<'src, Value> {
         match expr.op {
             UnaryOp::Neg => match self.eval_expr(&expr.unit, scope)? {
                 Value::Number(number) => Ok(Value::Number(-number)),
@@ -104,7 +111,12 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         }
     }
 
-    fn eval_binary(&mut self, expr: &BinaryExpr<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+    fn eval_binary_expr(
+        &mut self,
+        expr: &BinaryExpr<'src>,
+        span: &Span<'src>,
+        scope: &Scope,
+    ) -> EvalResult<'src, Value> {
         let lhsv = self.eval_expr(&expr.lhs, scope)?;
         let rhsv = self.eval_expr(&expr.rhs, scope)?;
 
@@ -120,14 +132,55 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         #[allow(irrefutable_let_patterns)]
         if let Number(fval) = val {
             if !fval.is_finite() {
-                return Err(EvalError::BinaryExprNotFinite(expr.clone()));
+                return Err(EvalError::BinaryExprNotFinite(expr.spanned(span)));
             }
         }
 
         Ok(val)
     }
 
-    fn eval_func(&mut self, func: &FuncDef<'src>, scope: &Scope) -> EvalResult<'src, Value> {
+    fn eval_func_call_expr(
+        &mut self,
+        expr: &FuncCallExpr<'src>,
+        span: &Span<'src>,
+        scope: &Scope,
+    ) -> EvalResult<'src, Value> {
+        let this_doc = &self.docs[&scope.doc];
+
+        if let Some(import_part) = expr.name.import_part {
+            let Some(import) = this_doc.imports.get(import_part.text) else {
+                return Err(EvalError::FuncCallImportNotInDoc(
+                    expr.spanned(span),
+                    import_part,
+                ));
+            };
+
+            let import_path = scope.doc.import_path(import)?;
+
+            let Some(import_doc) = self.docs.get(&import_path) else {
+                return Err(EvalError::FuncCallImportDocNotFound(expr.spanned(span)));
+            };
+            let Some(func) = import_doc.funcs.get(expr.name.name_part.text) else {
+                return Err(EvalError::FuncCallFuncNotFound(expr.spanned(span)));
+            };
+
+            let call_scope = self.build_call_scope(expr, span, scope, func, &import_path)?;
+            self.eval_func(func, &call_scope)
+        } else {
+            if let Some(arg) = scope.args.get(expr.name.name_part.text) {
+                Ok(arg.clone())
+            } else {
+                let Some(func) = this_doc.funcs.get(expr.name.name_part.text) else {
+                    return Err(EvalError::FuncCallFuncNotFound(expr.spanned(span)));
+                };
+
+                let call_scope = self.build_call_scope(expr, span, scope, func, &scope.doc)?;
+                self.eval_func(func, &call_scope)
+            }
+        }
+    }
+
+    fn eval_func(&mut self, func: &SpannedFuncDef<'src>, scope: &Scope) -> EvalResult<'src, Value> {
         if self.evaluating.contains(scope) {
             return Err(EvalError::FuncCallInfiniteRecursion(func.clone()));
         }
@@ -140,49 +193,13 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         Ok(val)
     }
 
-    fn eval_func_call(
-        &mut self,
-        expr: &FuncCallExpr<'src>,
-        scope: &Scope,
-    ) -> EvalResult<'src, Value> {
-        let this_doc = &self.docs[&scope.doc];
-
-        if let Some(import_part) = expr.name.import_part {
-            let Some(import) = this_doc.imports.get(import_part.text) else {
-                return Err(EvalError::FuncCallImportNotInDoc(expr.clone(), import_part));
-            };
-
-            let import_path = scope.doc.import_path(import)?;
-
-            let Some(import_doc) = self.docs.get(&import_path) else {
-                return Err(EvalError::FuncCallImportDocNotFound(expr.clone()));
-            };
-            let Some(func) = import_doc.funcs.get(expr.name.name_part.text) else {
-                return Err(EvalError::FuncCallFuncNotFound(expr.clone()));
-            };
-
-            let call_scope = self.build_call_scope(scope, func, &import_path, expr)?;
-            self.eval_func(func, &call_scope)
-        } else {
-            if let Some(arg) = scope.args.get(expr.name.name_part.text) {
-                Ok(arg.clone())
-            } else {
-                let Some(func) = this_doc.funcs.get(expr.name.name_part.text) else {
-                    return Err(EvalError::FuncCallFuncNotFound(expr.clone()));
-                };
-
-                let call_scope = self.build_call_scope(scope, func, &scope.doc, expr)?;
-                self.eval_func(func, &call_scope)
-            }
-        }
-    }
-
     fn build_call_scope(
         &mut self,
-        scope: &Scope,
-        func_def: &FuncDef<'src>,
-        def_doc_path: &FQPath,
         expr: &FuncCallExpr<'src>,
+        span: &Span<'src>,
+        scope: &Scope,
+        func_def: &SpannedFuncDef<'src>,
+        def_doc_path: &FQPath,
     ) -> EvalResult<'src, Scope> {
         let mut new = Scope {
             func_name: func_def.name.text.into(),
@@ -196,17 +213,21 @@ impl<'set, 'src> EvalCache<'set, 'src> {
                 for (i, call_arg) in args.iter().enumerate() {
                     let Some(def_args) = &func_def.args else {
                         return Err(EvalError::FuncCallTooManyArgs(
-                            expr.clone(),
+                            expr.spanned(span),
                             func_def.clone(),
                         ));
                     };
 
-                    if let Some(ArgDef { name, .. }) = def_args.args.get(i) {
+                    if let Some(SpannedArgDef {
+                        inner: ArgDef { name, .. },
+                        ..
+                    }) = def_args.args.get(i)
+                    {
                         let val = self.eval_expr(&call_arg, scope)?;
                         new.args.insert(name.text.into(), val);
                     } else {
                         return Err(EvalError::FuncCallTooManyArgs(
-                            expr.clone(),
+                            expr.spanned(span),
                             func_def.clone(),
                         ));
                     }
@@ -228,7 +249,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
 
                 if !extra_args.is_empty() {
                     return Err(EvalError::FuncCallExtraNamedArgs(
-                        expr.clone(),
+                        expr.spanned(span),
                         extra_args,
                         func_def.clone(),
                     ));
@@ -253,7 +274,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
             if !missing_args.is_empty() {
                 return Err(EvalError::FuncCallMissingArguments(
                     missing_args,
-                    expr.clone(),
+                    expr.spanned(span),
                 ));
             }
         }
@@ -261,7 +282,11 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         Ok(new)
     }
 
-    fn eval_default_value(&mut self, expr: &Expr<'src>, doc: &FQPath) -> EvalResult<'src, Value> {
+    fn eval_default_value(
+        &mut self,
+        expr: &SpannedExpr<'src>,
+        doc: &FQPath,
+    ) -> EvalResult<'src, Value> {
         let default_scope = Scope {
             func_name: Self::GLOBAL_FUNCNAME.into(),
             args: BTreeMap::default(),

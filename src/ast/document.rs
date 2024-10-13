@@ -9,8 +9,8 @@ use super::*;
 /// A complete unit of code, like a source file.
 #[derive(Default, Debug)]
 pub struct Document<'src> {
-    pub imports: HashMap<&'src str, Import<'src>>,
-    pub funcs: HashMap<&'src str, FuncDef<'src>>,
+    pub imports: HashMap<&'src str, SpannedImport<'src>>,
+    pub funcs: HashMap<&'src str, SpannedFuncDef<'src>>,
 }
 
 impl<'src> TryFrom<Pair<'src, Rule>> for Document<'src> {
@@ -23,16 +23,16 @@ impl<'src> TryFrom<Pair<'src, Rule>> for Document<'src> {
         for statement in value.into_inner() {
             match statement.as_rule() {
                 Rule::func_def => {
-                    let new = FuncDef::try_from(statement)?;
+                    let new = SpannedFuncDef::try_from(statement)?;
 
                     if let Some(old) = document.funcs.insert(new.name.text, new.clone()) {
                         return Err(ParseError::DuplicateFuncDef(old, new));
                     }
                 }
                 Rule::import => {
-                    let new = Import::try_from(statement)?;
+                    let new = SpannedImport::try_from(statement)?;
 
-                    if let Some(old) = document.imports.insert(new.alias, new) {
+                    if let Some(old) = document.imports.insert(new.alias, new.clone()) {
                         return Err(ParseError::DumplicateImport(old, new));
                     }
                 }

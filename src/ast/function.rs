@@ -1,6 +1,4 @@
-use std::{collections::HashMap, fmt::Display};
-
-use pest::Span;
+use std::collections::HashMap;
 
 use super::*;
 
@@ -8,61 +6,46 @@ use super::*;
 /// default value.
 #[derive(Clone, Debug)]
 pub struct ArgDef<'src> {
-    pub name: Identifier<'src>,
-    pub default: Option<Expr<'src>>,
-    pub span: Span<'src>,
+    pub name: SpannedIdentifier<'src>,
+    pub default: Option<SpannedExpr<'src>>,
 }
 
-impl<'src> Display for ArgDef<'src> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (line, col) = self.span.start_pos().line_col();
-        write!(
-            f,
-            "\"{0}\" on line {1}, col {2}",
-            self.span.as_str(),
-            line,
-            col
-        )
-    }
-}
+/// [`ArgDef`] but [`Spanned`].
+pub type SpannedArgDef<'src> = Spanned<'src, ArgDef<'src>>;
 
 impl<'src> TryFrom<Pair<'src, Rule>> for ArgDef<'src> {
     type Error = ParseError<'src>;
 
     fn try_from(value: Pair<'src, Rule>) -> Result<Self, Self::Error> {
-        let span = value.as_span();
         let mut inner = value.into_inner();
 
-        let name = Identifier::try_from(inner.try_next()?)?;
+        let name = SpannedIdentifier::try_from(inner.try_next()?)?;
 
         let default = if let Some(pair) = inner.next() {
-            Some(Expr::try_from(pair)?)
+            Some(SpannedExpr::try_from(pair)?)
         } else {
             None
         };
 
-        Ok(Self {
-            name,
-            default,
-            span,
-        })
+        Ok(Self { name, default })
     }
 }
 
 /// A collection of all the arguments in a function definition.
 #[derive(Clone, Debug)]
 pub struct ArgDefs<'src> {
-    pub args: Vec<ArgDef<'src>>,
-    pub span: Span<'src>,
+    pub args: Vec<SpannedArgDef<'src>>,
 }
+
+/// [`ArgDefs`] but [`Spanned`].
+pub type SpannedArgDefs<'src> = Spanned<'src, ArgDefs<'src>>;
 
 impl<'src> TryFrom<Pair<'src, Rule>> for ArgDefs<'src> {
     type Error = ParseError<'src>;
 
     fn try_from(value: Pair<'src, Rule>) -> Result<Self, Self::Error> {
-        let span = value.as_span();
-        let args: Result<Vec<_>, _> = value.into_inner().map(ArgDef::try_from).collect();
-        Ok(Self { args: args?, span })
+        let args: Result<Vec<_>, _> = value.into_inner().map(SpannedArgDef::try_from).collect();
+        Ok(Self { args: args? })
     }
 }
 
@@ -72,9 +55,12 @@ impl<'src> TryFrom<Pair<'src, Rule>> for ArgDefs<'src> {
 pub enum CallArgs<'src> {
     #[default]
     None,
-    Positional(Vec<Box<Expr<'src>>>),
-    Named(HashMap<&'src str, NamedCallArg<'src>>),
+    Positional(Vec<Box<SpannedExpr<'src>>>),
+    Named(HashMap<&'src str, SpannedNamedCallArg<'src>>),
 }
+
+/// [`CallArgs`] but [`Spanned`].
+pub type SpannedCallArgs<'src> = Spanned<'src, CallArgs<'src>>;
 
 impl<'src> TryFrom<Pair<'src, Rule>> for CallArgs<'src> {
     type Error = ParseError<'src>;
@@ -85,13 +71,15 @@ impl<'src> TryFrom<Pair<'src, Rule>> for CallArgs<'src> {
             Rule::pos_call_args => {
                 let args: Result<Vec<_>, ParseError> = value
                     .into_inner()
-                    .map(|pair| Expr::try_from(pair).map(Box::new))
+                    .map(|pair| SpannedExpr::try_from(pair).map(Box::new))
                     .collect();
                 Ok(CallArgs::Positional(args?))
             }
             Rule::named_call_args => {
-                let named_args: Result<Vec<_>, ParseError> =
-                    value.into_inner().map(NamedCallArg::try_from).collect();
+                let named_args: Result<Vec<_>, ParseError> = value
+                    .into_inner()
+                    .map(SpannedNamedCallArg::try_from)
+                    .collect();
 
                 let mut arg_map = HashMap::new();
 
@@ -111,72 +99,55 @@ impl<'src> TryFrom<Pair<'src, Rule>> for CallArgs<'src> {
 /// A single named argument in a function call. Like `foo = 1`.
 #[derive(Clone, Debug)]
 pub struct NamedCallArg<'src> {
-    pub name: Identifier<'src>,
-    pub expr: Box<Expr<'src>>,
-    pub span: Span<'src>,
+    pub name: SpannedIdentifier<'src>,
+    pub expr: Box<SpannedExpr<'src>>,
 }
 
-impl<'src> Display for NamedCallArg<'src> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (line, col) = self.span.start_pos().line_col();
-        write!(f, "\"{0}\" on line {1}, col {2}", self.name.text, line, col)
-    }
-}
+/// [`NamedCallArg`] but [`Spanned`].
+pub type SpannedNamedCallArg<'src> = Spanned<'src, NamedCallArg<'src>>;
 
 impl<'src> TryFrom<Pair<'src, Rule>> for NamedCallArg<'src> {
     type Error = ParseError<'src>;
 
     fn try_from(value: Pair<'src, Rule>) -> Result<Self, Self::Error> {
-        let span = value.as_span();
         // named_call_arg  = { identifier ~ "=" ~ expr }
         let mut inner = value.into_inner();
-        let name = Identifier::try_from(inner.try_next()?)?;
-        let expr = Box::new(Expr::try_from(inner.try_next()?)?);
-        Ok(Self { name, expr, span })
+        let name = SpannedIdentifier::try_from(inner.try_next()?)?;
+        let expr = Box::new(SpannedExpr::try_from(inner.try_next()?)?);
+        Ok(Self { name, expr })
     }
 }
 
 /// A complete function definition, including its arguments and body.
 #[derive(Clone, Debug)]
 pub struct FuncDef<'src> {
-    pub name: Identifier<'src>,
-    pub args: Option<ArgDefs<'src>>,
-    pub body: Expr<'src>,
-    pub span: Span<'src>,
+    pub name: SpannedIdentifier<'src>,
+    pub args: Option<SpannedArgDefs<'src>>,
+    pub body: SpannedExpr<'src>,
 }
 
-impl<'src> Display for FuncDef<'src> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let line = self.span.start_pos().line_col().0;
-        write!(f, "\"{0}\" on line {1}", self.name.text, line)
-    }
-}
+/// [`FuncDef`] but [`Spanned`].
+pub type SpannedFuncDef<'src> = Spanned<'src, FuncDef<'src>>;
 
 impl<'src> TryFrom<Pair<'src, Rule>> for FuncDef<'src> {
     type Error = ParseError<'src>;
 
     fn try_from(value: Pair<'src, Rule>) -> Result<Self, Self::Error> {
-        let span = value.as_span();
         let mut inner = value.into_inner();
 
         // func_def = { identifier ~ arg_defs? ~ "=" ~ expr }
-        let name = Identifier::try_from(inner.try_next()?)?;
+        let name = SpannedIdentifier::try_from(inner.try_next()?)?;
 
         let args_or_body = inner.try_next()?;
         let (args, body) = match args_or_body.as_rule() {
             Rule::arg_defs => (
-                Some(ArgDefs::try_from(args_or_body)?),
-                Expr::try_from(inner.try_next()?)?,
+                Some(SpannedArgDefs::try_from(args_or_body)?),
+                SpannedExpr::try_from(inner.try_next()?)?,
             ),
-            Rule::expr => (None, Expr::try_from(args_or_body)?),
+            Rule::expr => (None, SpannedExpr::try_from(args_or_body)?),
             _ => return Err(ParseError::UnexpectedFieldType),
         };
 
-        Ok(FuncDef {
-            name,
-            args,
-            body,
-            span,
-        })
+        Ok(FuncDef { name, args, body })
     }
 }

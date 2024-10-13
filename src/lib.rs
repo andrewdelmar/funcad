@@ -128,7 +128,7 @@ impl FQPath {
     /// Returns the `FQPath` of an import in a doc with path this path.
     pub(crate) fn import_path<'src>(
         &self,
-        import: &Import<'src>,
+        import: &SpannedImport<'src>,
     ) -> Result<FQPath, ParseError<'src>> {
         let mut new_parts = self.0.clone();
         new_parts.pop();
@@ -136,7 +136,7 @@ impl FQPath {
         for part in import.file.split("/") {
             match part {
                 ".." => match new_parts.pop() {
-                    None => return Err(ParseError::ImportNotInDir(*import)),
+                    None => return Err(ParseError::ImportNotInDir(import.clone())),
                     _ => {}
                 },
                 ident => {

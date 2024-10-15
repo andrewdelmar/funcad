@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
 };
 
@@ -35,7 +35,6 @@ impl Hash for Value {
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct Scope {
     func_name: String,
-    //TODO Eventually args should be lazily evaluated.
     args: BTreeMap<String, Value>,
     doc: FQPath,
 }
@@ -44,6 +43,8 @@ pub(crate) struct EvalCache<'set, 'src> {
     docs: &'set DocSet<'src>,
     //TODO actual cache
     evaluating: HashSet<Scope>,
+
+    cache: HashMap<Scope, Value>,
 }
 
 impl<'set, 'src> EvalCache<'set, 'src> {
@@ -53,6 +54,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         Self {
             docs,
             evaluating: HashSet::new(),
+            cache: HashMap::new(),
         }
     }
 
@@ -186,11 +188,19 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         }
         self.evaluating.insert(scope.clone());
 
-        let val = self.eval_expr(&func.body, scope)?;
+        let res = if let Some(cached) = self.cache.get(scope) {
+            Ok(cached.clone())
+        } else {
+            let res = self.eval_expr(&func.body, scope);
+            if let Ok(val) = &res {
+                self.cache.insert(scope.clone(), val.clone());
+            }
+            res
+        };
 
         self.evaluating.remove(&scope);
 
-        Ok(val)
+        res
     }
 
     fn build_call_scope(

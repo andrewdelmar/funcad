@@ -3,7 +3,7 @@ use std::{io::Error as IoError, num::ParseFloatError};
 use pest::{error::Error as PestError, Span};
 use thiserror::Error;
 
-use crate::{ast::*, FQPath, Rule};
+use crate::{ast::*, solids::SolidId, FQPath, Rule};
 
 /// An error in parsing a document.
 #[derive(Error, Debug)]
@@ -70,6 +70,9 @@ pub enum EvalError<'src> {
 
     #[error("An arithmetic operation resulted in a non finite result:\n\t{0}")]
     BinaryExprNotFinite(SpannedBinaryExpr<'src>),
+
+    #[error("Invalid Solid ID \"{0}\"")]
+    InvalidSolidId(SolidId),
 }
 
 // The #[from] macro can't handle non static lifetimes.

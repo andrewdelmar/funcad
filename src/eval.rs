@@ -8,12 +8,13 @@ use pest::Span;
 use crate::{
     ast::*,
     error::{EvalError, EvalResult},
-    DocSet, FQPath,
+    DocSet, FQPath, SolidId, SolidSet,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Number(f64),
+    Solid(SolidId),
 }
 
 // This is dangerous since float NaNs are never equal.
@@ -27,11 +28,11 @@ impl Hash for Value {
             // Just comparing the bits of floats ignores the fact that NaNs
             // should never be equal, but we should error on NaN anyway.
             Value::Number(val) => val.to_bits().hash(state),
+            Value::Solid(id) => id.hash(state),
         }
     }
 }
 
-//TODO this should be used as a key for EvalCache.
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct Scope {
     func_name: String,
@@ -41,10 +42,10 @@ struct Scope {
 
 pub(crate) struct EvalCache<'set, 'src> {
     docs: &'set DocSet<'src>,
-    //TODO actual cache
     evaluating: HashSet<Scope>,
 
     cache: HashMap<Scope, Value>,
+    solids: SolidSet,
 }
 
 impl<'set, 'src> EvalCache<'set, 'src> {
@@ -55,6 +56,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
             docs,
             evaluating: HashSet::new(),
             cache: HashMap::new(),
+            solids: SolidSet::default(),
         }
     }
 
@@ -109,6 +111,7 @@ impl<'set, 'src> EvalCache<'set, 'src> {
         match expr.op {
             UnaryOp::Neg => match self.eval_expr(&expr.unit, scope)? {
                 Value::Number(number) => Ok(Value::Number(-number)),
+                Value::Solid(ref solid) => Ok(Value::Solid(self.solids.negate(solid)?)),
             },
         }
     }
@@ -128,10 +131,12 @@ impl<'set, 'src> EvalCache<'set, 'src> {
             (Number(lhs), Sub, Number(rhs)) => Number(lhs - rhs),
             (Number(lhs), Mul, Number(rhs)) => Number(lhs * rhs),
             (Number(lhs), Div, Number(rhs)) => Number(lhs / rhs),
+            (Solid(ref lhs), Add, Solid(ref rhs)) => Solid(self.solids.union(lhs, rhs)?),
+            (Solid(ref lhs), Sub, Solid(ref rhs)) => Solid(self.solids.difference(lhs, rhs)?),
+            (Solid(ref lhs), Mul, Solid(ref rhs)) => Solid(self.solids.intersection(lhs, rhs)?),
+            _ => todo!(),
         };
 
-        // This won't stay irrifutable for long.
-        #[allow(irrefutable_let_patterns)]
         if let Number(fval) = val {
             if !fval.is_finite() {
                 return Err(EvalError::BinaryExprNotFinite(expr.spanned(span)));

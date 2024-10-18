@@ -11,6 +11,9 @@ mod eval;
 use eval::EvalCache;
 pub use eval::Value;
 
+mod solids;
+pub use solids::{SolidId, SolidSet};
+
 use std::{
     collections::{BTreeSet, HashMap},
     fmt::Display,

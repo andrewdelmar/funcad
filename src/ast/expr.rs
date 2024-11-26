@@ -137,6 +137,17 @@ pub enum BinaryOp {
     Div,
 }
 
+impl BinaryOp {
+    pub(crate) fn op_name(&self) -> &'static str {
+        match self {
+            BinaryOp::Add => "Addition",
+            BinaryOp::Sub => "Subtraction",
+            BinaryOp::Mul => "Multiplication",
+            BinaryOp::Div => "Division",
+        }
+    }
+}
+
 /// A binary expression like `a + b`.
 #[derive(Clone, Debug)]
 pub struct BinaryExpr<'src> {

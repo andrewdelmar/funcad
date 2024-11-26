@@ -107,10 +107,16 @@ fn eval_nan_errors() {
     let doc_set = parse_result.unwrap();
 
     let eval_result = eval_function(&doc_set, &entry, "a");
-    assert_matches!(eval_result, Err(EvalError::BinaryExprNotFinite(_)))
+    assert_matches!(
+        eval_result,
+        Err(EvalError {
+            error_type: EvalErrorType::NumExprNotFinite,
+            ..
+        })
+    )
 }
 
-/// Division by zero.
+/// Infinite recursion.
 #[test]
 fn eval_infinite_recursion_errors() {
     let mut set = FileSet::default();
@@ -124,10 +130,16 @@ fn eval_infinite_recursion_errors() {
     let doc_set = parse_result.unwrap();
 
     let eval_result = eval_function(&doc_set, &entry, "a");
-    assert_matches!(eval_result, Err(EvalError::FuncCallInfiniteRecursion(_)))
+    assert_matches!(
+        eval_result,
+        Err(EvalError {
+            error_type: EvalErrorType::InfiniteRecursion,
+            ..
+        })
+    );
 }
 
-/// Calling same function twice.
+/// Calling the same function twice.
 #[test]
 fn eval_multiple_calls_ok() {
     let mut set = FileSet::default();

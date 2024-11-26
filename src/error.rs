@@ -1,9 +1,9 @@
-use std::{io::Error as IoError, num::ParseFloatError};
+use std::{fmt::Display, io::Error as IoError, num::ParseFloatError};
 
 use pest::{error::Error as PestError, Span};
 use thiserror::Error;
 
-use crate::{ast::*, solids::SolidId, FQPath, Rule};
+use crate::{ast::*, eval::ContextEntry, FQPath, Rule};
 
 /// An error in parsing a document.
 #[derive(Error, Debug)]
@@ -37,49 +37,76 @@ pub enum ParseError<'src> {
 pub(crate) type ParseResult<'src, T> = Result<T, ParseError<'src>>;
 
 /// An error in evaluating a function.
-#[derive(Error, Debug)]
-pub enum EvalError<'src> {
-    #[error("Parsing error:\n{0}")]
-    Parse(ParseError<'src>),
-
-    #[error("Function not found:\n\t{0}")]
-    FuncCallFuncNotFound(SpannedFuncCallExpr<'src>),
-    #[error("Import document not found:\n\t{0}")]
-    FuncCallImportDocNotFound(SpannedFuncCallExpr<'src>),
-    #[error("Function call:\n\t{0}\nrefers to import \"{1}\" that is not in document")]
-    FuncCallImportNotInDoc(SpannedFuncCallExpr<'src>, SpannedIdentifier<'src>),
-    #[error("Missing arguments\n\t\"{}\"\nin call:\n\t{1}", .0.iter().map(SpannedArgDef::to_string).collect::<Vec<_>>().join("\n\t"))]
-    FuncCallMissingArguments(Vec<SpannedArgDef<'src>>, SpannedFuncCallExpr<'src>),
-    #[error("Too many arguments in call\n\t\"{0}\"\nof funtion:\n\t{1}")]
-    FuncCallTooManyArgs(SpannedFuncCallExpr<'src>, SpannedFuncDef<'src>),
-    #[error("Extra named args:\n\t{0}\nin call:\n\t{}\nof funtion:\n\t{2}", .1.iter().map(SpannedNamedCallArg::to_string).collect::<Vec<_>>().join(","))]
-    FuncCallExtraNamedArgs(
-        SpannedFuncCallExpr<'src>,
-        Vec<SpannedNamedCallArg<'src>>,
-        SpannedFuncDef<'src>,
-    ),
-    #[error("Function is infinitely recursive:\n\t{0}")]
-    FuncCallInfiniteRecursion(SpannedFuncDef<'src>),
-
-    #[error("Document of function not found:\n\t{0}")]
-    EvalFuncDocNotFound(FQPath),
-    #[error("Function \"{0}\" not found")]
-    EvalFuncFuncNotFound(String),
-    #[error("Function to evaluate has arguments without default values:\n\t{0}")]
-    EvalFuncHasArgs(SpannedFuncDef<'src>),
-
-    #[error("An arithmetic operation resulted in a non finite result:\n\t{0}")]
-    BinaryExprNotFinite(SpannedBinaryExpr<'src>),
-
-    #[error("Invalid Solid ID \"{0}\"")]
-    InvalidSolidId(SolidId),
+#[derive(Debug)]
+pub struct EvalError<'src> {
+    pub error_type: EvalErrorType<'src>,
+    pub(crate) context_entries: Vec<ContextEntry>,
 }
 
-// The #[from] macro can't handle non static lifetimes.
+impl<'src> Display for EvalError<'src> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error_type)?;
+        for entry in &self.context_entries {
+            write!(f, "\n\t{}", entry)?;
+        }
+        Ok(())
+    }
+}
+
 impl<'src> From<ParseError<'src>> for EvalError<'src> {
     fn from(value: ParseError<'src>) -> Self {
-        Self::Parse(value)
+        Self {
+            error_type: EvalErrorType::Parse(value),
+            context_entries: Vec::default(),
+        }
     }
 }
 
 pub(crate) type EvalResult<'src, T> = Result<T, EvalError<'src>>;
+
+// The type of an EvalError.
+#[derive(Error, Debug)]
+pub enum EvalErrorType<'src> {
+    #[error("Parsing error:\n{0}")]
+    Parse(ParseError<'src>),
+
+    #[error("Numeric expression was not finite")]
+    NumExprNotFinite,
+
+    #[error("The import \"{name}\" was not found")]
+    ImportNotFound { name: String },
+    #[error("The document \"{path}\" was not found")]
+    DocNotFound { path: FQPath },
+    #[error("The function \"{name}\" was not found")]
+    FuncNotFound { name: String },
+    #[error("The argument \"{name}\" was not found")]
+    ArgNotFound { name: String },
+    #[error("The built-in function \"{name}\" was not found")]
+    BuiltInNotFound { name: String },
+
+    #[error("Too many args in function call")]
+    TooManyArgs,
+    #[error("No argument named \"{name}\" in function definition")]
+    InvalidNamedArg { name: String },
+    #[error("No supplied or default value of argument \"{name}\"")]
+    NoSuppliedOrDefaultArg { name: String },
+    #[error("The supplied argument \"{name}\" is the wrong type: expected a \"{expected}\"; got a \"{got}\"")]
+    ArgWrongType {
+        name: String,
+        expected: &'static str,
+        got: &'static str,
+    },
+
+    #[error("Cannot perform {op} between a {lhs_type} and a {rhs_type}")]
+    BinaryOpWrongTypes {
+        op: &'static str,
+        lhs_type: &'static str,
+        rhs_type: &'static str,
+    },
+
+    #[error("Infinite recursion")]
+    InfiniteRecursion,
+
+    #[error("Invalid Solid ID")]
+    InvalidSolidId,
+}

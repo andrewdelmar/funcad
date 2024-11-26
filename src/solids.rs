@@ -2,9 +2,12 @@ use std::fmt::Display;
 
 use truck_modeling::Solid;
 
-use crate::{error::EvalResult, EvalError};
+use crate::{
+    error::{EvalErrorType, EvalResult},
+    EvalError,
+};
 
-/// A reference to a solid in SolidSet.
+/// A reference to a solid in [`SolidSet`].
 #[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub enum SolidId {
     Regular(usize),
@@ -25,7 +28,7 @@ impl Display for SolidId {
 /// A collection of [`Solid`]s.
 pub struct SolidSet {
     solids: Vec<Solid>,
-    tolerance: f64,
+    pub(crate) tolerance: f64,
 }
 
 impl Default for SolidSet {
@@ -38,15 +41,18 @@ impl Default for SolidSet {
 }
 
 impl SolidSet {
-    const DEFAULT_TOLERANCE: f64 = 0.0001;
+    const DEFAULT_TOLERANCE: f64 = 0.00001;
 
     pub fn try_get<'src>(&self, id: &SolidId) -> EvalResult<'src, &Solid> {
         match id {
-            SolidId::Regular(index) => self
-                .solids
-                .get(*index)
-                .ok_or(EvalError::InvalidSolidId(*id)),
-            SolidId::Empty | SolidId::Universal => Err(EvalError::InvalidSolidId(*id)),
+            SolidId::Regular(index) => self.solids.get(*index).ok_or(EvalError {
+                error_type: EvalErrorType::InvalidSolidId,
+                context_entries: Vec::default(),
+            }),
+            SolidId::Empty | SolidId::Universal => Err(EvalError {
+                error_type: EvalErrorType::InvalidSolidId,
+                context_entries: Vec::default(),
+            }),
         }
     }
 

@@ -4,18 +4,18 @@ pub mod ast;
 use ast::*;
 
 mod error;
-pub use error::{EvalError, ParseError};
+pub use error::{EvalError, ParseError, EvalErrorType};
 use error::{EvalResult, ParseResult};
 
 mod eval;
-use eval::EvalCache;
 pub use eval::Value;
+use eval::{EvalCache, EvalContext, Scope};
 
 mod solids;
 pub use solids::{SolidId, SolidSet};
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Display,
     fs::File,
     io::Read,
@@ -110,7 +110,14 @@ pub fn eval_function<'src>(
     func_name: &str,
 ) -> EvalResult<'src, Value> {
     let mut cache = EvalCache::new(docs);
-    cache.eval_func_by_name(doc_path, func_name)
+    let scope = Scope::FuncCall {
+        name: func_name.into(),
+        args: BTreeMap::new(),
+        doc_path: doc_path.clone(),
+    };
+
+    let context = EvalContext::default();
+    cache.eval_scope(&scope, &context)
 }
 
 /// A "fully qualified" path to a document or function.

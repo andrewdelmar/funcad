@@ -1,15 +1,3 @@
-use std::{
-    fmt::{Debug, Display},
-    ops::Deref,
-};
-
-use pest::{
-    iterators::{Pair, Pairs},
-    Span,
-};
-
-use crate::{error::ParseResult, ParseError, Rule};
-
 mod document;
 pub use document::Document;
 
@@ -30,6 +18,18 @@ pub use function::{
     ArgDef, ArgDefs, CallArgs, FuncDef, NamedCallArg, SpannedArgDef, SpannedArgDefs,
     SpannedCallArgs, SpannedFuncDef, SpannedNamedCallArg,
 };
+
+use std::{
+    fmt::{Debug, Display},
+    ops::Deref,
+};
+
+use pest::{
+    iterators::{Pair, Pairs},
+    Span,
+};
+
+use crate::{error::ParseResult, ParseError, Rule};
 
 // This is a conveniece trait to return an error if case the code doesn't match
 // the grammar and we unwrap somewhere we shouldn't.

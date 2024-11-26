@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use super::*;
 
@@ -49,6 +49,12 @@ impl<'src> TryFrom<Pair<'src, Rule>> for ArgDefs<'src> {
     }
 }
 
+impl<'src> ArgDefs<'src> {
+    pub(crate) fn with_name(&self, name: &str) -> Option<&SpannedArgDef<'src>> {
+        self.args.iter().find(|a| a.name.text == name)
+    }
+}
+
 /// A collection of all of the expressions passed as arguments in a single
 /// function call.
 #[derive(Clone, Default, Debug)]
@@ -56,7 +62,7 @@ pub enum CallArgs<'src> {
     #[default]
     None,
     Positional(Vec<Box<SpannedExpr<'src>>>),
-    Named(HashMap<&'src str, SpannedNamedCallArg<'src>>),
+    Named(BTreeMap<&'src str, SpannedNamedCallArg<'src>>),
 }
 
 /// [`CallArgs`] but [`Spanned`].
@@ -81,7 +87,7 @@ impl<'src> TryFrom<Pair<'src, Rule>> for CallArgs<'src> {
                     .map(SpannedNamedCallArg::try_from)
                     .collect();
 
-                let mut arg_map = HashMap::new();
+                let mut arg_map = BTreeMap::new();
 
                 for new in named_args? {
                     if let Some(old) = arg_map.insert(new.name.text, new.clone()) {
